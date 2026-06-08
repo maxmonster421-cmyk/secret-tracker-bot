@@ -6,6 +6,9 @@ import logging
 import asyncio
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json
+from datetime import datetime
+from difflib import get_close_matches
 
 from flask import Flask, request, jsonify
 
@@ -46,6 +49,10 @@ def load_data():
 
 data = load_data()
 
+pet_catalog = {}
+pet_catalog_lock = threading.Lock()
+
+
 try:
     conn = get_db()
     cur = conn.cursor()
@@ -83,6 +90,29 @@ except Exception:
     )
 
 
+
+def load_pet_catalog():
+    global pet_catalog
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT pet_name, pet_data
+            FROM pet_catalog
+            """)
+        rows = cur.fetchall()
+        cache = {}
+        for row in rows:
+            cache[row["pet_name"].lower()] = row["pet_data"]
+        with pet_catalog_lock:
+            pet_catalog = cache
+        conn.close()
+        log.info(f"[PETDATA] Loaded {len(cache)} pets from database")
+    except Exception:
+        log.exception("[PETDATA] Failed loading pet catalog")
+
+load_pet_catalog()
+
 def save_data():
     try:
         with data_lock:
@@ -103,6 +133,36 @@ def root():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/petdata", methods=["POST"])
+def petdata():
+    if not check_auth():
+        return jsonify({"error":"unauthorized"}),401
+    req=request.get_json(silent=True) or {}
+    if req.get("secret") != API_SECRET:
+        return jsonify({"error":"invalid secret"}),401
+    pets=req.get("pets",[])
+    if not isinstance(pets,list):
+        return jsonify({"error":"invalid pets"}),400
+    try:
+        conn=get_db(); cur=conn.cursor(); cache={}
+        for pet in pets:
+            if not pet.get("name"): continue
+            cur.execute("""
+                INSERT INTO pet_catalog (pet_name, pet_data, updated_at)
+                VALUES (%s,%s,NOW())
+                ON CONFLICT (pet_name)
+                DO UPDATE SET pet_data=EXCLUDED.pet_data, updated_at=NOW()
+            """,(pet["name"], Json(pet)))
+            cache[pet["name"].lower()] = pet
+        conn.commit(); conn.close()
+        with pet_catalog_lock:
+            pet_catalog.clear(); pet_catalog.update(cache)
+        return jsonify({"success":True,"count":len(cache)})
+    except Exception:
+        log.exception("[PETDATA] Update failed")
+        return jsonify({"success":False}),500
 
 @app.route("/hatch", methods=["POST"])
 def hatch():
@@ -392,6 +452,32 @@ def run_bot():
 
             await asyncio.sleep(5)
 
+
+    def parse_variant_and_name(search):
+        words=search.split(); variant="Normal"
+        lower=[w.lower() for w in words]
+        shiny="shiny" in lower; mythic="mythic" in lower
+        if shiny and mythic: variant="MythicShiny"
+        elif shiny: variant="Shiny"
+        elif mythic: variant="Mythic"
+        pet_name=" ".join([w for w in words if w.lower() not in ("shiny","mythic")])
+        return variant, pet_name
+
+    def find_pet(search_name):
+        with pet_catalog_lock:
+            catalog=dict(pet_catalog)
+        s=search_name.lower()
+        if s in catalog: return catalog[s]
+        for name,pet in catalog.items():
+            if s in name: return pet
+        search_words=set(s.split()); best=None; best_score=0
+        for name,pet in catalog.items():
+            score=len(search_words & set(name.split()))
+            if score>best_score: best_score=score; best=pet
+        if best: return best
+        matches=get_close_matches(s,catalog.keys(),n=1,cutoff=0.55)
+        return catalog[matches[0]] if matches else None
+
     @bot.event
     async def on_disconnect():
         log.warning("[BOT] DISCONNECTED")
@@ -551,6 +637,30 @@ def run_bot():
                 color=0xFAA61A
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="petsearch", description="Search the pet database")
+    @app_commands.describe(name="Pet name")
+    async def petsearch(interaction: discord.Interaction, name: str):
+        await interaction.response.defer()
+        variant, pet_name = parse_variant_and_name(name)
+        pet = find_pet(pet_name)
+        if not pet:
+            await interaction.followup.send(embed=discord.Embed(title="❌ Pet Not Found",description=f"No pet found matching **{name}**",color=0xED4245))
+            return
+        try: embed_color=int((pet.get("color") or "#5865F2").lstrip("#"),16)
+        except: embed_color=0x5865F2
+        image_data=pet.get("images",{})
+        thumb=image_data.get(variant) or image_data.get(variant.lower()) or image_data.get("normal") or image_data.get("Normal")
+        embed=discord.Embed(title=f"🐾 {variant} {pet['name']}",color=embed_color)
+        if thumb: embed.set_thumbnail(url=thumb)
+        embed.add_field(name="Rarity",value=pet.get("rarityDisplay",pet.get("rarity","Unknown")),inline=True)
+        embed.add_field(name="Chance",value=str(pet.get("chance","Unknown")),inline=True)
+        embed.add_field(name="Rarity Rank",value=str(pet.get("rarityRank","Unknown")),inline=True)
+        embed.add_field(name="Power",value=f"{pet.get('power',0):,}",inline=True)
+        embed.add_field(name="Egg",value=pet.get("egg","Unknown"),inline=True)
+        embed.add_field(name="World",value=pet.get("world","Unknown"),inline=True)
+        embed.set_footer(text=f"Pet Database • Last Updated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+        await interaction.followup.send(embed=embed)
 
 
     bot.run(BOT_TOKEN)

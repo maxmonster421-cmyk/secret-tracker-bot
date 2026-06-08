@@ -1,467 +1,219 @@
-"""
-Secret Pet Tracker Bot
-Discord bot + Flask API for Roblox pet hatch tracking and account verification.
-Flask runs as the main process (Render requires this), Discord bot runs in a background thread.
-"""
-
 import os
-import sqlite3
-import random
-import string
+import json
+import secrets
 import threading
-import asyncio
 import logging
-from datetime import datetime, timedelta
-
-import discord
-from discord import app_commands
 from flask import Flask, request, jsonify
+import discord
+from discord.ext import commands
+from discord import app_commands
 
-# ─── Configuration ───────────────────────────────────────────────────────────
-BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-API_SECRET = os.environ.get("API_SECRET", "change_me_to_a_real_secret")
-DATABASE_PATH = os.environ.get("DATABASE_PATH", "tracker.db")
-MAX_ACCOUNTS = 5
-CODE_EXPIRY_MINUTES = 10
+# ─── Configuration ───────────────────────────────────────────
+API_SECRET = os.environ.get("API_SECRET", "Hatches101310")
+BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+MAX_VERIFIED_PER_PERSON = 5
 PORT = int(os.environ.get("PORT", 10000))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-log = logging.getLogger("tracker")
+# ─── In-memory storage ──────────────────────────────────────
+pending_codes = {}       # username -> {code, expires}
+verified_accounts = {}   # discord_user_id -> [roblox_usernames]
+hatch_log = []           # list of hatch events
 
-
-# ─── Database ─────────────────────────────────────────────────────────────────
-db_lock = threading.Lock()
-
-
-def get_db():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    with db_lock:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS pending_verifications (
-                roblox_username TEXT PRIMARY KEY,
-                code TEXT NOT NULL,
-                discord_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS verified_accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_id INTEGER NOT NULL,
-                roblox_username TEXT NOT NULL,
-                verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(discord_id, roblox_username)
-            )
-        """)
-        conn.commit()
-        conn.close()
-    log.info("Database initialized")
-
-
-def generate_code(length=6):
-    chars = string.ascii_uppercase + string.digits
-    return "".join(random.choices(chars, k=length))
-
-
-def cleanup_expired_codes():
-    with db_lock:
-        conn = get_db()
-        expiry_time = (datetime.utcnow() - timedelta(minutes=CODE_EXPIRY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute(
-            "DELETE FROM pending_verifications WHERE created_at < ?",
-            (expiry_time,),
-        )
-        conn.commit()
-        conn.close()
-
-
-# ─── Discord Bot (runs in background thread) ─────────────────────────────────
-bot_ready = threading.Event()
-discord_client = None
-
-
-def run_discord_bot():
-    """Run the Discord bot in a background thread."""
-    global discord_client
-
-    if not BOT_TOKEN:
-        log.error("DISCORD_BOT_TOKEN not set — bot will not start. API will still work.")
-        return
-
-    try:
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        client = discord.Client(intents=intents)
-        tree = app_commands.CommandTree(client)
-        discord_client = client
-
-        @client.event
-        async def on_ready():
-            try:
-                synced = await tree.sync()
-                log.info(f"Synced {len(synced)} slash commands")
-            except Exception as e:
-                log.error(f"Failed to sync commands: {e}")
-            log.info(f"Bot online as {client.user}")
-            bot_ready.set()
-
-        # ── /verify ──────────────────────────────────────────────────────
-        @tree.command(name="verify", description="Start verifying your Roblox account")
-        @app_commands.describe(username="Your exact Roblox username")
-        async def verify_cmd(interaction: discord.Interaction, username: str):
-            discord_id = interaction.user.id
-            username = username.strip()
-
-            if not username:
-                await interaction.response.send_message("❌ Please provide a valid username.", ephemeral=True)
-                return
-
-            with db_lock:
-                conn = get_db()
-                c = conn.cursor()
-                c.execute(
-                    "SELECT 1 FROM verified_accounts WHERE discord_id = ? AND roblox_username = ?",
-                    (discord_id, username),
-                )
-                if c.fetchone():
-                    conn.close()
-                    await interaction.response.send_message(
-                        f"✅ **{username}** is already verified on your account!", ephemeral=True
-                    )
-                    return
-
-                c.execute("SELECT COUNT(*) as cnt FROM verified_accounts WHERE discord_id = ?", (discord_id,))
-                count = c.fetchone()["cnt"]
-                if count >= MAX_ACCOUNTS:
-                    conn.close()
-                    await interaction.response.send_message(
-                        f"❌ You already have **{MAX_ACCOUNTS}** verified accounts (the maximum). "
-                        f"Use `/unverify` to remove one first.",
-                        ephemeral=True,
-                    )
-                    return
-
-                code = generate_code()
-                c.execute(
-                    "INSERT OR REPLACE INTO pending_verifications (roblox_username, code, discord_id) VALUES (?, ?, ?)",
-                    (username, code, discord_id),
-                )
-                conn.commit()
-                conn.close()
-
-            embed = discord.Embed(title="🔐 Verify Your Roblox Account", color=0x2ECC71)
-            embed.add_field(name="Step 1", value=f"Join the Roblox game on account **{username}**", inline=False)
-            embed.add_field(name="Step 2", value="A verification code will appear as a notification in-game", inline=False)
-            embed.add_field(name="Step 3", value="Verification is **automatic** — just join and you're done!", inline=False)
-            embed.set_footer(text=f"Code expires in {CODE_EXPIRY_MINUTES} minutes")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # ── /confirm (manual backup) ────────────────────────────────────
-        @tree.command(name="confirm", description="Manually confirm a verification code (backup)")
-        @app_commands.describe(code="The 6-character code shown in-game")
-        async def confirm_cmd(interaction: discord.Interaction, code: str):
-            discord_id = interaction.user.id
-            code = code.strip().upper()
-
-            with db_lock:
-                conn = get_db()
-                c = conn.cursor()
-                c.execute(
-                    "SELECT * FROM pending_verifications WHERE discord_id = ? AND code = ?",
-                    (discord_id, code),
-                )
-                row = c.fetchone()
-
-                if not row:
-                    conn.close()
-                    await interaction.response.send_message(
-                        "❌ Invalid code! Make sure you entered it correctly, or use `/verify` to start over.",
-                        ephemeral=True,
-                    )
-                    return
-
-                roblox_username = row["roblox_username"]
-                created_at = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
-
-                if datetime.utcnow() - created_at > timedelta(minutes=CODE_EXPIRY_MINUTES):
-                    c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (roblox_username,))
-                    conn.commit()
-                    conn.close()
-                    await interaction.response.send_message(
-                        "❌ That code has expired! Use `/verify` to generate a new one.", ephemeral=True
-                    )
-                    return
-
-                c.execute("SELECT COUNT(*) as cnt FROM verified_accounts WHERE discord_id = ?", (discord_id,))
-                count = c.fetchone()["cnt"]
-                if count >= MAX_ACCOUNTS:
-                    c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (roblox_username,))
-                    conn.commit()
-                    conn.close()
-                    await interaction.response.send_message(
-                        f"❌ You've reached the maximum of **{MAX_ACCOUNTS}** verified accounts!", ephemeral=True
-                    )
-                    return
-
-                c.execute(
-                    "INSERT INTO verified_accounts (discord_id, roblox_username) VALUES (?, ?)",
-                    (discord_id, roblox_username),
-                )
-                c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (roblox_username,))
-                conn.commit()
-                conn.close()
-
-            embed = discord.Embed(title="✅ Verified!", description=f"**{roblox_username}** is now linked to your Discord!", color=0x2ECC71)
-            embed.add_field(name="What's Next", value="You'll receive DM notifications when you hatch Secret or Nova pets!", inline=False)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # ── /accounts ────────────────────────────────────────────────────
-        @tree.command(name="accounts", description="View your verified Roblox accounts")
-        async def accounts_cmd(interaction: discord.Interaction):
-            discord_id = interaction.user.id
-
-            with db_lock:
-                conn = get_db()
-                c = conn.cursor()
-                c.execute(
-                    "SELECT roblox_username, verified_at FROM verified_accounts WHERE discord_id = ? ORDER BY verified_at",
-                    (discord_id,),
-                )
-                rows = c.fetchall()
-                conn.close()
-
-            if not rows:
-                await interaction.response.send_message(
-                    "You don't have any verified accounts yet. Use `/verify` to get started!", ephemeral=True
-                )
-                return
-
-            embed = discord.Embed(title="📋 Your Verified Accounts", description=f"**{len(rows)}/{MAX_ACCOUNTS}** slots used", color=0x5865F2)
-            for i, row in enumerate(rows, 1):
-                embed.add_field(name=f"#{i} — {row['roblox_username']}", value=f"Verified: {row['verified_at']}", inline=False)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # ── /unverify ────────────────────────────────────────────────────
-        @tree.command(name="unverify", description="Remove a verified Roblox account")
-        @app_commands.describe(username="The Roblox username to unlink")
-        async def unverify_cmd(interaction: discord.Interaction, username: str):
-            discord_id = interaction.user.id
-            username = username.strip()
-
-            with db_lock:
-                conn = get_db()
-                c = conn.cursor()
-                c.execute(
-                    "DELETE FROM verified_accounts WHERE discord_id = ? AND roblox_username = ?",
-                    (discord_id, username),
-                )
-                deleted = c.rowcount
-                conn.commit()
-                conn.close()
-
-            if deleted:
-                await interaction.response.send_message(f"✅ Removed **{username}** from your verified accounts.", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"❌ **{username}** isn't linked to your Discord.", ephemeral=True)
-
-        client.run(BOT_TOKEN)
-
-    except Exception as e:
-        log.error(f"Discord bot crashed: {e}")
-        log.error("API server will continue running without the bot.")
-
-
-def send_dm(discord_id, content):
-    """Thread-safe: schedule a DM from the Discord bot's event loop."""
-    if not discord_client or not bot_ready.is_set():
-        log.warning(f"Bot not ready, skipping DM to {discord_id}")
-        return
-
-    async def _send():
-        try:
-            user = discord_client.get_user(discord_id)
-            if user is None:
-                user = await discord_client.fetch_user(discord_id)
-            if user:
-                await user.send(content)
-                log.info(f"DM sent to user {discord_id}")
-            else:
-                log.warning(f"User {discord_id} not found for DM")
-        except discord.Forbidden:
-            log.warning(f"Cannot DM user {discord_id} (DMs disabled or blocked)")
-        except Exception as e:
-            log.error(f"DM error for {discord_id}: {e}")
-
-    if discord_client.loop and not discord_client.loop.is_closed():
-        asyncio.run_coroutine_threadsafe(_send(), discord_client.loop)
-
-
-# ─── Flask API (main process — this is what Render needs) ────────────────────
+# ─── Flask App (MAIN process — this is what Render runs) ────
 app = Flask(__name__)
-
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("verification_api")
 
 def check_auth(req):
     auth = req.headers.get("Authorization", "")
     return auth == f"Bearer {API_SECRET}"
 
-
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "bot_online": bot_ready.is_set()})
-
+    return jsonify({"status": "ok"})
 
 @app.route("/hatch", methods=["POST"])
 def hatch():
     if not check_auth(request):
         return jsonify({"error": "unauthorized"}), 401
-
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "invalid json"}), 400
-
-    username = data.get("username", "")
-    pet = data.get("pet", "")
-    rarity = data.get("rarity", "")
-    egg = data.get("egg", "")
-
-    if not all([username, pet, rarity, egg]):
-        return jsonify({"error": "missing fields"}), 400
-
-    with db_lock:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT discord_id FROM verified_accounts WHERE roblox_username = ?", (username,))
-        rows = c.fetchall()
-        conn.close()
-
-    notified = 0
-    for row in rows:
-        dm_msg = (
-            f"🎉 **Secret Pet Hatched!**\n\n"
-            f"**Player:** {username}\n"
-            f"**Pet:** {pet}\n"
-            f"**Rarity:** {rarity}\n"
-            f"**Egg:** {egg}\n\n"
-            f"Congratulations on the incredible hatch!"
-        )
-        send_dm(row["discord_id"], dm_msg)
-        notified += 1
-
-    log.info(f"Hatch: {username} hatched {rarity} {pet} from {egg} | DM'd {notified} user(s)")
-    return jsonify({"success": True, "notified": notified})
-
+    entry = {
+        "username": data.get("username", "Unknown"),
+        "pet": data.get("pet", "Unknown"),
+        "rarity": data.get("rarity", "Unknown"),
+        "egg": data.get("egg", "Unknown"),
+    }
+    hatch_log.append(entry)
+    log.info(f"[HATCH] {entry['username']} hatched {entry['rarity']} {entry['pet']} from {entry['egg']}")
+    
+    # Try to DM verified users (non-blocking)
+    try:
+        notify_hatch(entry)
+    except Exception as e:
+        log.warning(f"[HATCH] DM notification failed: {e}")
+    
+    return jsonify({"success": True})
 
 @app.route("/getcode", methods=["GET"])
 def getcode():
     if not check_auth(request):
         return jsonify({"error": "unauthorized"}), 401
-
-    username = request.args.get("user", "").strip()
+    username = request.args.get("user", "")
     if not username:
         return jsonify({"error": "missing user param"}), 400
-
-    cleanup_expired_codes()
-
-    with db_lock:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT code FROM pending_verifications WHERE roblox_username = ?", (username,))
-        row = c.fetchone()
-        conn.close()
-
-    if row:
-        return jsonify({"code": row["code"]})
+    
+    if username in pending_codes:
+        return jsonify({"code": pending_codes[username]["code"]})
+    
     return jsonify({"code": None})
-
 
 @app.route("/confirmverify", methods=["POST"])
 def confirmverify():
     if not check_auth(request):
         return jsonify({"error": "unauthorized"}), 401
-
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "invalid json"}), 400
-
-    username = data.get("username", "").strip()
-    code = data.get("code", "").strip().upper()
-
-    if not all([username, code]):
-        return jsonify({"error": "missing fields"}), 400
-
-    with db_lock:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            "SELECT * FROM pending_verifications WHERE roblox_username = ? AND code = ?",
-            (username, code),
-        )
-        row = c.fetchone()
-
-        if not row:
-            conn.close()
-            return jsonify({"success": False, "error": "invalid code or username"})
-
-        discord_id = row["discord_id"]
-        created_at = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
-
-        if datetime.utcnow() - created_at > timedelta(minutes=CODE_EXPIRY_MINUTES):
-            c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (username,))
-            conn.commit()
-            conn.close()
-            return jsonify({"success": False, "error": "code expired"})
-
-        c.execute("SELECT COUNT(*) as cnt FROM verified_accounts WHERE discord_id = ?", (discord_id,))
-        count = c.fetchone()["cnt"]
-        if count >= MAX_ACCOUNTS:
-            c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (username,))
-            conn.commit()
-            conn.close()
-            return jsonify({"success": False, "error": "max accounts reached"})
-
-        c.execute(
-            "SELECT 1 FROM verified_accounts WHERE discord_id = ? AND roblox_username = ?",
-            (discord_id, username),
-        )
-        if c.fetchone():
-            c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (username,))
-            conn.commit()
-            conn.close()
-            return jsonify({"success": False, "error": "already verified"})
-
-        c.execute(
-            "INSERT INTO verified_accounts (discord_id, roblox_username) VALUES (?, ?)",
-            (discord_id, username),
-        )
-        c.execute("DELETE FROM pending_verifications WHERE roblox_username = ?", (username,))
-        conn.commit()
-        conn.close()
-
-    send_dm(discord_id, f"✅ Your Roblox account **{username}** has been verified! You'll now receive hatch notifications here.")
-    log.info(f"Verified: {username} → Discord {discord_id}")
+    username = data.get("username", "")
+    code = data.get("code", "")
+    log.info(f"[VERIFY] Confirmed: {username} with code {code}")
+    # Remove the pending code after confirmation
+    pending_codes.pop(username, None)
     return jsonify({"success": True})
 
+@app.route("/generatecode", methods=["POST"])
+def generatecode():
+    """Used by the Discord bot slash command to generate a code for a Roblox player."""
+    if not check_auth(request):
+        return jsonify({"error": "unauthorized"}), 401
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "invalid json"}), 400
+    username = data.get("username", "")
+    discord_id = data.get("discord_id", "")
+    if not username:
+        return jsonify({"error": "missing username"}), 400
+    
+    # Check max verified accounts
+    user_accounts = verified_accounts.get(discord_id, [])
+    if len(user_accounts) >= MAX_VERIFIED_PER_PERSON:
+        return jsonify({"error": f"Max {MAX_VERIFIED_PER_PERSON} accounts per person"}), 400
+    
+    code = str(secrets.randbelow(900000) + 100000)  # 6-digit code
+    pending_codes[username] = {"code": code, "discord_id": discord_id}
+    
+    if discord_id and username not in user_accounts:
+        user_accounts.append(username)
+        verified_accounts[discord_id] = user_accounts
+    
+    log.info(f"[VERIFY] Generated code {code} for {username} (Discord: {discord_id})")
+    return jsonify({"code": code, "username": username})
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+@app.route("/verified", methods=["GET"])
+def get_verified():
+    if not check_auth(request):
+        return jsonify({"error": "unauthorized"}), 401
+    discord_id = request.args.get("discord_id", "")
+    accounts = verified_accounts.get(discord_id, [])
+    return jsonify({"accounts": accounts})
+
+# ─── Discord Bot (runs in background thread) ─────────────────
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+def notify_hatch(entry):
+    """Send DM to verified users about a hatch event."""
+    # This is called from the /hatch endpoint
+    # We'll queue it for the bot to process
+    pass
+
+@bot.event
+async def on_ready():
+    log.info(f"[BOT] Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        log.info(f"[BOT] Synced {len(synced)} commands")
+    except Exception as e:
+        log.error(f"[BOT] Failed to sync commands: {e}")
+
+@bot.tree.command(name="verify", description="Generate a verification code for your Roblox account")
+@app_commands.describe(username="Your Roblox username")
+async def verify_cmd(interaction: discord.Interaction, username: str):
+    discord_id = str(interaction.user.id)
+    user_accounts = verified_accounts.get(discord_id, [])
+    
+    if len(user_accounts) >= MAX_VERIFIED_PER_PERSON:
+        await interaction.response.send_message(
+            f"You already have {MAX_VERIFIED_PER_PERSON} verified accounts (the maximum).",
+            ephemeral=True
+        )
+        return
+    
+    code = str(secrets.randbelow(900000) + 100000)
+    pending_codes[username] = {"code": code, "discord_id": discord_id}
+    
+    if username not in user_accounts:
+        user_accounts.append(username)
+        verified_accounts[discord_id] = user_accounts
+    
+    await interaction.response.send_message(
+        f"Your verification code is: **{code}**\nJoin the game and enter this code when prompted.",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="myaccounts", description="View your verified Roblox accounts")
+async def myaccounts_cmd(interaction: discord.Interaction):
+    discord_id = str(interaction.user.id)
+    accounts = verified_accounts.get(discord_id, [])
+    if accounts:
+        account_list = "\n".join(f"• {a}" for a in accounts)
+        await interaction.response.send_message(
+            f"Your verified accounts ({len(accounts)}/{MAX_VERIFIED_PER_PERSON}):\n{account_list}",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "You have no verified accounts yet. Use /verify to get started!",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="unverify", description="Remove a verified Roblox account")
+@app_commands.describe(username="The Roblox username to unverify")
+async def unverify_cmd(interaction: discord.Interaction, username: str):
+    discord_id = str(interaction.user.id)
+    accounts = verified_accounts.get(discord_id, [])
+    if username in accounts:
+        accounts.remove(username)
+        pending_codes.pop(username, None)
+        await interaction.response.send_message(
+            f"Unverified **{username}**.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"**{username}** is not verified under your account.",
+            ephemeral=True
+        )
+
+def run_bot():
+    """Run the Discord bot in a separate thread. If it fails, the API stays up."""
+    if not BOT_TOKEN:
+        log.warning("[BOT] No DISCORD_BOT_TOKEN set. Bot will not start. API will still work.")
+        return
+    try:
+        bot.run(BOT_TOKEN)
+    except Exception as e:
+        log.error(f"[BOT] Bot crashed: {e}. API server will continue running.")
+
+# ─── Startup ─────────────────────────────────────────────────
 if __name__ == "__main__":
-    init_db()
-
-    # Start Discord bot in a background thread
-    bot_thread = threading.Thread(target=run_discord_bot, daemon=True)
+    # Start the Discord bot in a background thread
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-    log.info("Discord bot thread started")
-
-    # Flask runs on the main thread — this is what Render expects
-    log.info(f"Starting API server on port {PORT}")
+    
+    # Start Flask as the MAIN process (this is what Render expects)
+    log.info(f"[API] Starting Flask on 0.0.0.0:{PORT}")
     app.run(host="0.0.0.0", port=PORT)

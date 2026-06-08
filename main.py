@@ -174,6 +174,8 @@ def run_bot():
         await bot.wait_until_ready()
 
         while not bot.is_closed():
+            log.info("[QUEUE] Worker heartbeat")
+
             try:
                 hatch = None
 

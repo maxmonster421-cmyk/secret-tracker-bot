@@ -174,10 +174,6 @@ def run_bot():
         await bot.wait_until_ready()
 
         while not bot.is_closed():
-            log.info("[QUEUE] Worker heartbeat")
-            log.info(
-                f"[QUEUE] Queue length: {len(data['hatch_queue'])}"
-            )
 
             try:
                 hatch = None
@@ -189,14 +185,12 @@ def run_bot():
                 if hatch:
                     save_data()
 
-                    log.info(f"[QUEUE] PROCESSING {hatch}")
 
                     discord_id = hatch["discord_id"]
 
                     try:
                         user = await bot.fetch_user(int(discord_id))
 
-                        log.info(f"[DM] FOUND USER {user.id}")
 
                         embed = discord.Embed(
                             title=f"🎉 Your {hatch['rarity']} Hatch!",
@@ -207,11 +201,9 @@ def run_bot():
                         embed.add_field(name="Egg", value=hatch["egg"], inline=True)
                         embed.add_field(name="Account", value=hatch["username"], inline=False)
 
-                        log.info(f"[DM] ATTEMPTING SEND {discord_id}")
 
                         await user.send(embed=embed)
 
-                        log.info(f"[DM] SUCCESS {discord_id}")
 
                         log.info(f"[DM] Sent hatch DM to {discord_id}")
 

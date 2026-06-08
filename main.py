@@ -193,17 +193,23 @@ def run_bot():
 
 
                         embed = discord.Embed(
-                            title=f"🎉 Your {hatch['rarity']} Hatch!",
+                            title=f"{hatch['username']} has hatched a {hatch['rarity']} pet!",
                             color=0xFFD700 if hatch["rarity"] == "Secret" else 0x00FFFF
                         )
 
                         embed.add_field(name="Pet", value=hatch["pet"], inline=True)
-                        embed.add_field(name="Egg", value=hatch["egg"], inline=True)
-                        embed.add_field(name="Account", value=hatch["username"], inline=False)
+                        embed.add_field(name="Rarity", value=hatch["rarity"], inline=True)
+                        embed.add_field(name="Egg", value=hatch["egg"] or "Unknown", inline=True)
+                        embed.add_field(name="Account", value=hatch["username"], inline=True)
+                        embed.add_field(name="World", value="Unknown", inline=True)
+                        embed.timestamp = discord.utils.utcnow()
 
 
                         await user.send(
-                            content=f"🎉 Congratulations <@{discord_id}>!",
+                            content=(
+                                f"🎉 Congratulations <@{discord_id}>!\n"
+                                f"A rare hatch has been detected on **{hatch['username']}**."
+                            ),
                             embed=embed
                         )
 
@@ -264,19 +270,15 @@ def run_bot():
 
         save_data()
 
-        await interaction.response.send_message(
-            f"""
-### Verification Code
-
-**{code}**
-
-Join the game and the account will be linked automatically.
-
-Linked Accounts:
-{len(accounts)}/{MAX_ACCOUNTS}
-""",
-            ephemeral=True
+        embed = discord.Embed(
+            title="🔐 Roblox Account Verification",
+            description=f"Use the code below in-game to link your Roblox account.",
+            color=0x5865F2
         )
+        embed.add_field(name="Verification Code", value=f"**{code}**", inline=False)
+        embed.add_field(name="Linked Accounts", value=f"{len(accounts)}/{MAX_ACCOUNTS}", inline=True)
+        embed.set_footer(text="Your account will be linked automatically after verification.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
     @bot.tree.command(
@@ -291,17 +293,25 @@ Linked Accounts:
             linked = data["verified"].get(discord_id, [])
 
         if not linked:
-            await interaction.response.send_message(
-                "You have no linked Roblox accounts.",
-                ephemeral=True
+            embed = discord.Embed(
+                title="📋 Linked Roblox Accounts",
+                description="No Roblox accounts are currently linked to your Discord account.",
+                color=0xED4245
             )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        await interaction.response.send_message(
-            f"Linked Accounts ({len(linked)}/{MAX_ACCOUNTS})\n\n" +
-            "\n".join(f"• {a}" for a in linked),
-            ephemeral=True
+        embed = discord.Embed(
+            title="📋 Linked Roblox Accounts",
+            description="\n".join(f"• {a}" for a in linked),
+            color=0x57F287
         )
+        embed.add_field(
+            name="Account Usage",
+            value=f"{len(linked)}/{MAX_ACCOUNTS} linked accounts",
+            inline=False
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(
         name="unlink",
@@ -342,15 +352,19 @@ Linked Accounts:
         save_data()
 
         if removed:
-            await interaction.response.send_message(
-                f"✅ Unlinked **{username}**",
-                ephemeral=True
+            embed = discord.Embed(
+                title="✅ Account Unlinked",
+                description=f"**{username}** has been successfully removed from your linked accounts.",
+                color=0x57F287
             )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
-            await interaction.response.send_message(
-                "That account isn't linked.",
-                ephemeral=True
+            embed = discord.Embed(
+                title="⚠️ Account Not Found",
+                description="That Roblox account is not linked to your Discord account.",
+                color=0xFAA61A
             )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
     bot.run(BOT_TOKEN)

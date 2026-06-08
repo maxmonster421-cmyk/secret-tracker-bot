@@ -175,6 +175,9 @@ def run_bot():
 
         while not bot.is_closed():
             log.info("[QUEUE] Worker heartbeat")
+            log.info(
+                f"[QUEUE] Queue length: {len(data['hatch_queue'])}"
+            )
 
             try:
                 hatch = None

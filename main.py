@@ -185,13 +185,18 @@ def run_bot():
                 with data_lock:
                     if data["hatch_queue"]:
                         hatch = data["hatch_queue"].pop(0)
-                        save_data()
 
                 if hatch:
+                    save_data()
+
+                    log.info(f"[QUEUE] PROCESSING {hatch}")
+
                     discord_id = hatch["discord_id"]
 
                     try:
                         user = await bot.fetch_user(int(discord_id))
+
+                        log.info(f"[DM] FOUND USER {user.id}")
 
                         embed = discord.Embed(
                             title=f"🎉 Your {hatch['rarity']} Hatch!",
@@ -202,7 +207,11 @@ def run_bot():
                         embed.add_field(name="Egg", value=hatch["egg"], inline=True)
                         embed.add_field(name="Account", value=hatch["username"], inline=False)
 
+                        log.info(f"[DM] ATTEMPTING SEND {discord_id}")
+
                         await user.send(embed=embed)
+
+                        log.info(f"[DM] SUCCESS {discord_id}")
 
                         log.info(f"[DM] Sent hatch DM to {discord_id}")
 

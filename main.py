@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("hatch_tracker")
 
-data_lock = threading.Lock()
+data_lock = threading.RLock()
 
 def load_data():
     try:
@@ -158,11 +158,12 @@ def generatecode():
     return jsonify({"code": code})
 
 def run_bot():
-    if not BOT_TOKEN:
-        log.warning("No token configured")
-        return
+    try:
+        if not BOT_TOKEN:
+            log.warning("No token configured")
+            return
 
-    import discord
+        import discord
     from discord.ext import commands
     from discord import app_commands
 
@@ -218,6 +219,18 @@ def run_bot():
             await asyncio.sleep(5)
 
     @bot.event
+    async def on_disconnect():
+        log.warning("[BOT] DISCONNECTED FROM DISCORD")
+
+    @bot.event
+    async def on_resumed():
+        log.info("[BOT] RESUMED CONNECTION")
+
+    @bot.event
+    async def on_error(event, *args, **kwargs):
+        log.exception(f"[BOT] ERROR IN EVENT {event}")
+
+    @bot.event
     async def on_ready():
         log.info(f"Logged in as {bot.user}")
 
@@ -259,6 +272,9 @@ def run_bot():
         )
 
     bot.run(BOT_TOKEN)
+
+    except Exception:
+        log.exception("[BOT] FATAL CRASH")
 
 if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()

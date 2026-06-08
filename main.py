@@ -202,7 +202,10 @@ def run_bot():
                         embed.add_field(name="Account", value=hatch["username"], inline=False)
 
 
-                        await user.send(embed=embed)
+                        await user.send(
+                            content=f"🎉 Congratulations <@{discord_id}>!",
+                            embed=embed
+                        )
 
 
                         log.info(f"[DM] Sent hatch DM to {discord_id}")
@@ -262,9 +265,93 @@ def run_bot():
         save_data()
 
         await interaction.response.send_message(
-            f"Verification code: **{code}**",
+            f"""
+### Verification Code
+
+**{code}**
+
+Join the game and the account will be linked automatically.
+
+Linked Accounts:
+{len(accounts)}/{MAX_ACCOUNTS}
+""",
             ephemeral=True
         )
+
+
+    @bot.tree.command(
+        name="accounts",
+        description="View your linked Roblox accounts"
+    )
+    async def accounts(interaction: discord.Interaction):
+
+        discord_id = str(interaction.user.id)
+
+        with data_lock:
+            linked = data["verified"].get(discord_id, [])
+
+        if not linked:
+            await interaction.response.send_message(
+                "You have no linked Roblox accounts.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Linked Accounts ({len(linked)}/{MAX_ACCOUNTS})\n\n" +
+            "\n".join(f"• {a}" for a in linked),
+            ephemeral=True
+        )
+
+    @bot.tree.command(
+        name="unlink",
+        description="Unlink a Roblox account"
+    )
+    @app_commands.describe(
+        username="Roblox username to unlink"
+    )
+    async def unlink(
+        interaction: discord.Interaction,
+        username: str
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        removed = False
+
+        with data_lock:
+
+            accounts = data["verified"].get(
+                discord_id,
+                []
+            )
+
+            if username in accounts:
+
+                accounts.remove(username)
+
+                data["verified"][discord_id] = accounts
+
+                data["roblox_to_discord"].pop(
+                    username.lower(),
+                    None
+                )
+
+                removed = True
+
+        save_data()
+
+        if removed:
+            await interaction.response.send_message(
+                f"✅ Unlinked **{username}**",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "That account isn't linked.",
+                ephemeral=True
+            )
+
 
     bot.run(BOT_TOKEN)
 

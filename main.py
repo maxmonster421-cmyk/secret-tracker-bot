@@ -164,8 +164,8 @@ def run_bot():
             return
 
         import discord
-    from discord.ext import commands
-    from discord import app_commands
+        from discord.ext import commands
+        from discord import app_commands
 
     intents = discord.Intents.default()
 
@@ -271,7 +271,7 @@ def run_bot():
             ephemeral=True
         )
 
-    bot.run(BOT_TOKEN)
+        bot.run(BOT_TOKEN)
 
     except Exception:
         log.exception("[BOT] FATAL CRASH")

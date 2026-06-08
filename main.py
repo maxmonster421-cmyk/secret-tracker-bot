@@ -118,6 +118,13 @@ def hatch():
     rarity = req.get("rarity", "")
     egg = req.get("egg", "")
 
+    pet_rarity = req.get("petRarity", "")
+    color = req.get("color", "")
+    thumbnail = req.get("thumbnail")
+    world = req.get("world", "Unknown")
+    serial = req.get("serial")
+    total_count = req.get("totalCount")
+
     discord_id = data["roblox_to_discord"].get(username.lower())
 
     log.info(f"[HATCH] {username} hatched {rarity} {pet} from {egg}")
@@ -130,7 +137,13 @@ def hatch():
                 "username": username,
                 "pet": pet,
                 "rarity": rarity,
-                "egg": egg
+                "pet_rarity": pet_rarity,
+                "color": color,
+                "thumbnail": thumbnail,
+                "egg": egg,
+                "world": world,
+                "serial": serial,
+                "total_count": total_count
             })
         save_data()
         log.info(f"[QUEUE] Added hatch for {discord_id}")
@@ -327,16 +340,34 @@ def run_bot():
                         user = await bot.fetch_user(int(discord_id))
 
 
+                        # Parse color from hex string like "#ff0000", fallback to gold/cyan
+                        embed_color = 0xFFD700
+                        if hatch.get("color"):
+                            try:
+                                embed_color = int(hatch["color"].lstrip("#"), 16)
+                            except ValueError:
+                                if hatch.get("pet_rarity") == "Nova":
+                                    embed_color = 0x00FFFF
+
                         embed = discord.Embed(
-                            title=f"{hatch['username']} has hatched a {hatch['rarity']} pet!",
-                            color=0xFFD700 if hatch["rarity"] == "Secret" else 0x00FFFF
+                            title=f"{hatch['username']} has hatched a {hatch.get('pet_rarity', 'rare')} pet!",
+                            color=embed_color
                         )
 
                         embed.add_field(name="Pet", value=hatch["pet"], inline=True)
-                        embed.add_field(name="Rarity", value=hatch["rarity"], inline=True)
+                        embed.add_field(name="Rarity", value=f"1 in {hatch['rarity']}", inline=True)
                         embed.add_field(name="Egg", value=hatch["egg"] or "Unknown", inline=True)
-                        embed.add_field(name="Account", value=hatch["username"], inline=True)
-                        embed.add_field(name="World", value="Unknown", inline=True)
+                        embed.add_field(name="World", value=hatch.get("world", "Unknown"), inline=True)
+
+                        if hatch.get("serial"):
+                            embed.add_field(name="Serial #", value=f"{hatch['serial']:,}", inline=True)
+
+                        if hatch.get("total_count"):
+                            embed.add_field(name="Total in Existence", value=f"{hatch['total_count']:,}", inline=True)
+
+                        if hatch.get("thumbnail"):
+                            embed.set_thumbnail(url=hatch["thumbnail"])
+
                         embed.timestamp = discord.utils.utcnow()
 
 

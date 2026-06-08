@@ -232,7 +232,8 @@ def run_bot():
             except Exception as e:
                 log.error(f"[HATCH QUEUE] Error: {e}")
 
-            await discord.utils.sleep(5)
+import asyncio
+await asyncio.sleep(5)
 
     @bot.tree.command(name="verify", description="Verify your Roblox account for hatch DMs")
     @app_commands.describe(username="Your exact Roblox username")

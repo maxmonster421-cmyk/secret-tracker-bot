@@ -4,11 +4,14 @@ import secrets
 import threading
 import logging
 import asyncio
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 from flask import Flask, request, jsonify
 
 API_SECRET = os.environ.get("API_SECRET", "CHANGE_ME")
 BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 PORT = int(os.environ.get("PORT", 10000))
 DATA_FILE = "data.json"
 MAX_ACCOUNTS = 5
@@ -20,6 +23,12 @@ logging.basicConfig(
 log = logging.getLogger("hatch_tracker")
 
 data_lock = threading.Lock()
+
+def get_db():
+    return psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=RealDictCursor
+    )
 
 def load_data():
     try:
@@ -36,6 +45,43 @@ def load_data():
     }
 
 data = load_data()
+
+try:
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT discord_id, roblox_username
+        FROM linked_accounts
+        """
+    )
+
+    rows = cur.fetchall()
+
+    for row in rows:
+        discord_id = row["discord_id"]
+        username = row["roblox_username"]
+
+        accounts = data["verified"].get(
+            discord_id,
+            []
+        )
+
+        accounts.append(username)
+
+        data["verified"][discord_id] = accounts
+        data["roblox_to_discord"][
+            username.lower()
+        ] = discord_id
+
+    conn.close()
+
+except Exception:
+    log.exception(
+        "Failed loading linked accounts"
+    )
+
 
 def save_data():
     try:
@@ -125,7 +171,60 @@ def confirmverify():
 
             data["verified"][discord_id] = accounts
             data["roblox_to_discord"][username.lower()] = discord_id
+
+            try:
+                conn = get_db()
+                cur = conn.cursor()
+
+                cur.execute(
+                    """
+                    INSERT INTO linked_accounts
+                    (
+                        discord_id,
+                        roblox_username
+                    )
+                    VALUES (%s, %s)
+                    ON CONFLICT
+                    (
+                        roblox_username
+                    )
+                    DO NOTHING
+                    """,
+                    (
+                        discord_id,
+                        username
+                    )
+                )
+
+                conn.commit()
+                conn.close()
+
+            except Exception:
+                log.exception(
+                    "Failed saving linked account"
+                )
+
             data["pending_codes"].pop(username, None)
+
+            try:
+                conn = get_db()
+                cur = conn.cursor()
+
+                cur.execute(
+                    """
+                    DELETE FROM pending_codes
+                    WHERE roblox_username = %s
+                    """,
+                    (username,)
+                )
+
+                conn.commit()
+                conn.close()
+
+            except Exception:
+                log.exception(
+                    "Failed deleting pending code"
+                )
 
     save_data()
     log.info(f"[VERIFY] Confirmed: {username}")
@@ -153,6 +252,42 @@ def generatecode():
             "code": code,
             "discord_id": discord_id
         }
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                INSERT INTO pending_codes
+                (
+                    roblox_username,
+                    code,
+                    discord_id
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT
+                (
+                    roblox_username
+                )
+                DO UPDATE SET
+                    code = EXCLUDED.code,
+                    discord_id = EXCLUDED.discord_id
+                """,
+                (
+                    username,
+                    code,
+                    discord_id
+                )
+            )
+
+            conn.commit()
+            conn.close()
+
+        except Exception:
+            log.exception(
+                "Failed saving pending code"
+            )
 
     save_data()
     return jsonify({"code": code})
@@ -348,6 +483,26 @@ def run_bot():
                 )
 
                 removed = True
+
+                try:
+                    conn = get_db()
+                    cur = conn.cursor()
+
+                    cur.execute(
+                        """
+                        DELETE FROM linked_accounts
+                        WHERE roblox_username = %s
+                        """,
+                        (username,)
+                    )
+
+                    conn.commit()
+                    conn.close()
+
+                except Exception:
+                    log.exception(
+                        "Failed unlinking account"
+                    )
 
         save_data()
 

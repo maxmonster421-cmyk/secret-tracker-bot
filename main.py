@@ -1725,7 +1725,104 @@ def run_bot():
             embed=embed
         )
 
-    @bot.tree.command(name="titles", description="View unlocked titles")
+    
+    @bot.tree.command(
+        name="buy",
+        description="Purchase an item"
+    )
+    @app_commands.describe(
+        item="Item to buy"
+    )
+    async def buy(
+        interaction: discord.Interaction,
+        item: str
+    ):
+
+        refresh_shop()
+
+        discord_id = str(
+            interaction.user.id
+        )
+
+        profile = get_profile(
+            discord_id
+        )
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT *
+            FROM shop_items
+            WHERE LOWER(item_name)=LOWER(%s)
+            """,
+            (item,)
+        )
+
+        row = cur.fetchone()
+
+        if not row:
+            conn.close()
+            await interaction.response.send_message(
+                "Item not found.",
+                ephemeral=True
+            )
+            return
+
+        if row["stock"] <= 0:
+            conn.close()
+            await interaction.response.send_message(
+                "Item is out of stock.",
+                ephemeral=True
+            )
+            return
+
+        if profile["coins"] < row["price"]:
+            conn.close()
+            await interaction.response.send_message(
+                f"You need {row['price']:,} coins.",
+                ephemeral=True
+            )
+            return
+
+        cur.execute(
+            """
+            UPDATE player_profiles
+            SET coins = coins - %s
+            WHERE discord_id = %s
+            """,
+            (
+                row["price"],
+                discord_id
+            )
+        )
+
+        cur.execute(
+            """
+            UPDATE shop_items
+            SET stock = stock - 1
+            WHERE item_name = %s
+            """,
+            (
+                row["item_name"],
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+        add_title(
+            discord_id,
+            row["item_name"]
+        )
+
+        await interaction.response.send_message(
+            f"✅ Purchased {row['item_name']}"
+        )
+
+
+@bot.tree.command(name="titles", description="View unlocked titles")
     async def titles(interaction: discord.Interaction):
         conn=get_db(); cur=conn.cursor()
         cur.execute("SELECT title FROM player_titles WHERE discord_id = %s",(str(interaction.user.id),))
@@ -1737,20 +1834,99 @@ def run_bot():
         embed.description="\n".join(r["title"] for r in rows)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="title", description="Equip a title")
-    @app_commands.describe(title="Title name")
-    async def title(interaction: discord.Interaction, title: str):
-        discord_id=str(interaction.user.id)
-        conn=get_db(); cur=conn.cursor()
-        cur.execute("SELECT * FROM player_titles WHERE discord_id = %s AND title = %s",(discord_id,title))
-        row=cur.fetchone()
+    
+    @bot.tree.command(
+        name="toggletitle",
+        description="Equip or unequip a title"
+    )
+    @app_commands.describe(
+        title="Title name"
+    )
+    async def toggletitle(
+        interaction: discord.Interaction,
+        title: str
+    ):
+
+        discord_id = str(
+            interaction.user.id
+        )
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT *
+            FROM player_titles
+            WHERE discord_id = %s
+            AND title = %s
+            """,
+            (
+                discord_id,
+                title
+            )
+        )
+
+        row = cur.fetchone()
+
         if not row:
+
             conn.close()
-            await interaction.response.send_message("You don't own that title.", ephemeral=True)
+
+            await interaction.response.send_message(
+                "You don't own that title.",
+                ephemeral=True
+            )
+
             return
-        cur.execute("UPDATE player_profiles SET equipped_title = %s WHERE discord_id = %s",(title,discord_id))
-        conn.commit(); conn.close()
-        await interaction.response.send_message(f"👑 Equipped {title}")
+
+        cur.execute(
+            """
+            SELECT equipped_title
+            FROM player_profiles
+            WHERE discord_id = %s
+            """,
+            (discord_id,)
+        )
+
+        profile = cur.fetchone()
+
+        if profile and profile["equipped_title"] == title:
+
+            cur.execute(
+                """
+                UPDATE player_profiles
+                SET equipped_title = NULL
+                WHERE discord_id = %s
+                """,
+                (discord_id,)
+            )
+
+            message = f"❌ Unequipped {title}"
+
+        else:
+
+            cur.execute(
+                """
+                UPDATE player_profiles
+                SET equipped_title = %s
+                WHERE discord_id = %s
+                """,
+                (
+                    title,
+                    discord_id
+                )
+            )
+
+            message = f"👑 Equipped {title}"
+
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message(
+            message
+        )
+
 
     @bot.tree.command(name="luck", description="Analyze your luck")
     async def luck(interaction: discord.Interaction):

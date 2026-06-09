@@ -17,6 +17,53 @@ PORT = int(os.environ.get("PORT", 10000))
 DATA_FILE = "data.json"
 MAX_ACCOUNTS = 5
 
+
+SHOP_POOL = [
+    {
+        "name": "Dedicated",
+        "price": 2500,
+        "chance": 70,
+        "stock_min": 3,
+        "stock_max": 10
+    },
+    {
+        "name": "Lucky",
+        "price": 5000,
+        "chance": 50,
+        "stock_min": 2,
+        "stock_max": 6
+    },
+    {
+        "name": "Collector",
+        "price": 7500,
+        "chance": 40,
+        "stock_min": 2,
+        "stock_max": 4
+    },
+    {
+        "name": "Secret Hunter",
+        "price": 15000,
+        "chance": 20,
+        "stock_min": 1,
+        "stock_max": 3
+    },
+    {
+        "name": "Nova Hunter",
+        "price": 30000,
+        "chance": 10,
+        "stock_min": 1,
+        "stock_max": 2
+    },
+    {
+        "name": "Legend",
+        "price": 100000,
+        "chance": 3,
+        "stock_min": 1,
+        "stock_max": 1
+    }
+]
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -104,6 +151,81 @@ def add_title(discord_id, title):
             title
         )
     )
+
+    conn.commit()
+    conn.close()
+
+
+
+def get_shop_cycle():
+
+    return int(
+        datetime.utcnow().timestamp() // 300
+    )
+
+
+def refresh_shop():
+
+    cycle = get_shop_cycle()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT refresh_cycle
+        FROM shop_items
+        LIMIT 1
+        """
+    )
+
+    existing = cur.fetchone()
+
+    if existing and existing["refresh_cycle"] == cycle:
+
+        conn.close()
+        return
+
+    cur.execute(
+        """
+        DELETE FROM shop_items
+        """
+    )
+
+    for item in SHOP_POOL:
+
+        if secrets.randbelow(100) >= item["chance"]:
+            continue
+
+        stock = (
+            secrets.randbelow(
+                item["stock_max"] -
+                item["stock_min"] + 1
+            )
+            + item["stock_min"]
+        )
+
+        cur.execute(
+            """
+            INSERT INTO shop_items
+            (
+                item_name,
+                price,
+                stock,
+                refresh_cycle
+            )
+            VALUES
+            (
+                %s,%s,%s,%s
+            )
+            """,
+            (
+                item["name"],
+                item["price"],
+                stock,
+                cycle
+            )
+        )
 
     conn.commit()
     conn.close()
@@ -1547,27 +1669,61 @@ def run_bot():
 
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name="crate", description="Open a crate")
-    async def crate(interaction: discord.Interaction):
-        COST = 250
-        discord_id = str(interaction.user.id)
-        profile = get_profile(discord_id)
 
-        if profile["coins"] < COST:
-            await interaction.response.send_message(f"Need {COST} coins.", ephemeral=True)
-            return
+    @bot.tree.command(
+        name="shop",
+        description="View the current shop"
+    )
+    async def shop(
+        interaction: discord.Interaction
+    ):
 
-        rewards = [("Lucky",35),("Collector",25),("Secret Hunter",15),("Nova Hunter",10),("Legend",5)]
-        title = rewards[secrets.randbelow(len(rewards))][0]
-        add_title(discord_id, title)
+        refresh_shop()
 
-        conn=get_db(); cur=conn.cursor()
-        cur.execute("""UPDATE player_profiles SET coins = coins - %s, crates_opened = crates_opened + 1 WHERE discord_id = %s""",(COST,discord_id))
-        conn.commit(); conn.close()
+        conn = get_db()
+        cur = conn.cursor()
 
-        embed=discord.Embed(title="📦 Crate Opened", color=0xF1C40F)
-        embed.add_field(name="Unlocked Title", value=title)
-        await interaction.response.send_message(embed=embed)
+        cur.execute(
+            """
+            SELECT *
+            FROM shop_items
+            ORDER BY price
+            """
+        )
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        embed = discord.Embed(
+            title="🛒 Rotating Shop",
+            color=0x57F287
+        )
+
+        if not rows:
+
+            embed.description = (
+                "Nothing is currently in stock."
+            )
+
+        for row in rows:
+
+            embed.add_field(
+                name=row["item_name"],
+                value=(
+                    f"💰 {row['price']:,}\n"
+                    f"📦 {row['stock']} left"
+                ),
+                inline=False
+            )
+
+        embed.set_footer(
+            text="Refreshes every 5 minutes"
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
 
     @bot.tree.command(name="titles", description="View unlocked titles")
     async def titles(interaction: discord.Interaction):
@@ -1703,28 +1859,3 @@ def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, threaded=True)
-
-
-# =========================
-# SHOP / JOBS UPDATE BLOCK
-# =========================
-
-SHOP_POOL = [
-    {"name":"Dedicated","price":2500,"chance":70,"stock_min":3,"stock_max":10},
-    {"name":"Lucky","price":5000,"chance":50,"stock_min":2,"stock_max":6},
-    {"name":"Collector","price":7500,"chance":40,"stock_min":2,"stock_max":4},
-    {"name":"Secret Hunter","price":15000,"chance":20,"stock_min":1,"stock_max":3},
-    {"name":"Nova Hunter","price":30000,"chance":10,"stock_min":1,"stock_max":2},
-    {"name":"Legend","price":100000,"chance":3,"stock_min":1,"stock_max":1}
-]
-
-def get_shop_cycle():
-    return int(datetime.utcnow().timestamp() // 300)
-
-def refresh_shop():
-    pass  # insert supplied implementation
-
-# Replace /crate with /shop and /buy.
-# Rename /title -> /toggletitle.
-# Add /fish, /mine, /delivery.
-# Add /givecoins admin command.

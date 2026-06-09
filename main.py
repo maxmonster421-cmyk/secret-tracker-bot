@@ -680,6 +680,266 @@ def run_bot():
 
 
     @bot.tree.command(
+        name="hatches",
+        description="View your recent hatches"
+    )
+    async def hatches(
+        interaction: discord.Interaction
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                ORDER BY hatched_at DESC
+                LIMIT 10
+                """,
+                (discord_id,)
+            )
+
+            rows = cur.fetchall()
+            conn.close()
+
+        except Exception:
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not rows:
+            await interaction.response.send_message(
+                "No hatch history found.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="📜 Recent Hatches",
+            color=0x5865F2
+        )
+
+        for row in rows:
+
+            embed.add_field(
+                name=row["pet"],
+                value=(
+                    f"{row['pet_rarity']} • "
+                    f"1 in {row['rarity']}"
+                ),
+                inline=False
+            )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+    @bot.tree.command(
+        name="flex",
+        description="Show off your best hatch"
+    )
+    async def flex(
+        interaction: discord.Interaction
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                """,
+                (discord_id,)
+            )
+
+            rows = cur.fetchall()
+            conn.close()
+
+        except Exception:
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not rows:
+            await interaction.response.send_message(
+                "No hatch history found.",
+                ephemeral=True
+            )
+            return
+
+        best = max(
+            rows,
+            key=lambda r: float(
+                str(r["rarity"]).replace(",", "")
+            )
+        )
+
+        embed = discord.Embed(
+            title="💎 FLEX CARD",
+            color=0xFFD700
+        )
+
+        embed.add_field(
+            name="Best Hatch",
+            value=best["pet"],
+            inline=False
+        )
+
+        embed.add_field(
+            name="Rarity",
+            value=f"1 in {best['rarity']}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Type",
+            value=best["pet_rarity"],
+            inline=True
+        )
+
+        if best["serial"]:
+            embed.add_field(
+                name="Serial",
+                value=f"#{best['serial']:,}",
+                inline=True
+            )
+
+        embed.add_field(
+            name="Total Rare Hatches",
+            value=f"{len(rows):,}",
+            inline=False
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+    @bot.tree.command(
+        name="compare",
+        description="Compare hatch stats"
+    )
+    @app_commands.describe(
+        user="User to compare against"
+    )
+    async def compare(
+        interaction: discord.Interaction,
+        user: discord.Member
+    ):
+
+        try:
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                """,
+                (str(interaction.user.id),)
+            )
+
+            me = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                """,
+                (str(user.id),)
+            )
+
+            them = cur.fetchall()
+
+            conn.close()
+
+        except Exception:
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not me or not them:
+
+            await interaction.response.send_message(
+                "One of the users has no hatch history.",
+                ephemeral=True
+            )
+
+            return
+
+        my_secrets = sum(
+            1 for r in me
+            if r["pet_rarity"] == "Secret"
+        )
+
+        their_secrets = sum(
+            1 for r in them
+            if r["pet_rarity"] == "Secret"
+        )
+
+        my_novas = sum(
+            1 for r in me
+            if r["pet_rarity"] == "Nova"
+        )
+
+        their_novas = sum(
+            1 for r in them
+            if r["pet_rarity"] == "Nova"
+        )
+
+        embed = discord.Embed(
+            title="⚔️ Hatch Comparison",
+            color=0x5865F2
+        )
+
+        embed.add_field(
+            name="Total Rare Hatches",
+            value=f"{len(me)} vs {len(them)}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Secrets",
+            value=f"{my_secrets} vs {their_secrets}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Novas",
+            value=f"{my_novas} vs {their_novas}",
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"{interaction.user.display_name} vs {user.display_name}"
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
+
+    @bot.tree.command(
         name="unlink",
         description="Unlink a Roblox account"
     )

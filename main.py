@@ -579,7 +579,9 @@ def run_bot():
 
         rarest = max(
             rows,
-            key=lambda r: float(r["rarity"])
+            key=lambda r: float(
+            str(r["rarity"]).replace(",", "")
+        )
         )
 
         embed = discord.Embed(
@@ -632,7 +634,11 @@ def run_bot():
                 SELECT *
                 FROM hatch_history
                 WHERE discord_id = %s
-                ORDER BY CAST(rarity AS DOUBLE PRECISION) DESC
+                ORDER BY
+                CAST(
+                    REPLACE(rarity, ',', '')
+                    AS DOUBLE PRECISION
+                ) DESC
                 LIMIT 10
                 """,
                 (discord_id,)

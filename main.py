@@ -1703,3 +1703,28 @@ def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, threaded=True)
+
+
+# =========================
+# SHOP / JOBS UPDATE BLOCK
+# =========================
+
+SHOP_POOL = [
+    {"name":"Dedicated","price":2500,"chance":70,"stock_min":3,"stock_max":10},
+    {"name":"Lucky","price":5000,"chance":50,"stock_min":2,"stock_max":6},
+    {"name":"Collector","price":7500,"chance":40,"stock_min":2,"stock_max":4},
+    {"name":"Secret Hunter","price":15000,"chance":20,"stock_min":1,"stock_max":3},
+    {"name":"Nova Hunter","price":30000,"chance":10,"stock_min":1,"stock_max":2},
+    {"name":"Legend","price":100000,"chance":3,"stock_min":1,"stock_max":1}
+]
+
+def get_shop_cycle():
+    return int(datetime.utcnow().timestamp() // 300)
+
+def refresh_shop():
+    pass  # insert supplied implementation
+
+# Replace /crate with /shop and /buy.
+# Rename /title -> /toggletitle.
+# Add /fish, /mine, /delivery.
+# Add /givecoins admin command.

@@ -31,6 +31,84 @@ def get_db():
         cursor_factory=RealDictCursor
     )
 
+
+
+def ensure_profile(discord_id):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO player_profiles
+        (
+            discord_id
+        )
+        VALUES
+        (
+            %s
+        )
+        ON CONFLICT (discord_id)
+        DO NOTHING
+        """,
+        (discord_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_profile(discord_id):
+
+    ensure_profile(discord_id)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT *
+        FROM player_profiles
+        WHERE discord_id = %s
+        """,
+        (discord_id,)
+    )
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    return row
+
+
+def add_title(discord_id, title):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO player_titles
+        (
+            discord_id,
+            title
+        )
+        VALUES
+        (
+            %s,%s
+        )
+        ON CONFLICT DO NOTHING
+        """,
+        (
+            discord_id,
+            title
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+
 def load_data():
     try:
         if os.path.exists(DATA_FILE):
@@ -1404,6 +1482,146 @@ def run_bot():
         await interaction.response.send_message(
             embed=embed
         )
+
+
+
+
+    @bot.tree.command(
+        name="daily",
+        description="Claim your daily coins"
+    )
+    async def daily(
+        interaction: discord.Interaction
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        profile = get_profile(discord_id)
+
+        now = datetime.utcnow()
+
+        if profile["daily_claim"]:
+
+            elapsed = (
+                now -
+                profile["daily_claim"]
+            ).total_seconds()
+
+            if elapsed < 86400:
+
+                hours = int(
+                    (86400 - elapsed) / 3600
+                )
+
+                await interaction.response.send_message(
+                    f"⏳ Come back in {hours}h",
+                    ephemeral=True
+                )
+
+                return
+
+        reward = secrets.randbelow(401) + 100
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE player_profiles
+            SET
+                coins = coins + %s,
+                daily_claim = NOW()
+            WHERE discord_id = %s
+            """,
+            (
+                reward,
+                discord_id
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(title="🎁 Daily Reward", color=0x57F287)
+        embed.add_field(name="Coins Earned", value=f"{reward:,}")
+
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="crate", description="Open a crate")
+    async def crate(interaction: discord.Interaction):
+        COST = 250
+        discord_id = str(interaction.user.id)
+        profile = get_profile(discord_id)
+
+        if profile["coins"] < COST:
+            await interaction.response.send_message(f"Need {COST} coins.", ephemeral=True)
+            return
+
+        rewards = [("Lucky",35),("Collector",25),("Secret Hunter",15),("Nova Hunter",10),("Legend",5)]
+        title = rewards[secrets.randbelow(len(rewards))][0]
+        add_title(discord_id, title)
+
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("""UPDATE player_profiles SET coins = coins - %s, crates_opened = crates_opened + 1 WHERE discord_id = %s""",(COST,discord_id))
+        conn.commit(); conn.close()
+
+        embed=discord.Embed(title="📦 Crate Opened", color=0xF1C40F)
+        embed.add_field(name="Unlocked Title", value=title)
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="titles", description="View unlocked titles")
+    async def titles(interaction: discord.Interaction):
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("SELECT title FROM player_titles WHERE discord_id = %s",(str(interaction.user.id),))
+        rows=cur.fetchall(); conn.close()
+        if not rows:
+            await interaction.response.send_message("No titles unlocked.")
+            return
+        embed=discord.Embed(title="👑 Titles", color=0xFFD700)
+        embed.description="\n".join(r["title"] for r in rows)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="title", description="Equip a title")
+    @app_commands.describe(title="Title name")
+    async def title(interaction: discord.Interaction, title: str):
+        discord_id=str(interaction.user.id)
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("SELECT * FROM player_titles WHERE discord_id = %s AND title = %s",(discord_id,title))
+        row=cur.fetchone()
+        if not row:
+            conn.close()
+            await interaction.response.send_message("You don't own that title.", ephemeral=True)
+            return
+        cur.execute("UPDATE player_profiles SET equipped_title = %s WHERE discord_id = %s",(title,discord_id))
+        conn.commit(); conn.close()
+        await interaction.response.send_message(f"👑 Equipped {title}")
+
+    @bot.tree.command(name="luck", description="Analyze your luck")
+    async def luck(interaction: discord.Interaction):
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("SELECT rarity FROM hatch_history WHERE discord_id = %s",(str(interaction.user.id),))
+        rows=cur.fetchall(); conn.close()
+        if not rows:
+            await interaction.response.send_message("No hatch history.")
+            return
+        score=min(100,int(sum(float(str(r["rarity"]).replace(",","")) for r in rows)/10000000))
+        embed=discord.Embed(title="🍀 Luck Analysis", color=0x2ECC71)
+        embed.add_field(name="Luck Score", value=f"{score}/100")
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name="halloffame", description="Global records")
+    async def halloffame(interaction: discord.Interaction):
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("""SELECT * FROM hatch_history ORDER BY CAST(REPLACE(rarity, ',', '') AS DOUBLE PRECISION) DESC LIMIT 1""")
+        rarest=cur.fetchone()
+        cur.execute("""SELECT * FROM hatch_history WHERE serial IS NOT NULL ORDER BY serial ASC LIMIT 1""")
+        serial=cur.fetchone(); conn.close()
+        embed=discord.Embed(title="🏆 Hall of Fame", color=0xFFD700)
+        if rarest:
+            embed.add_field(name="Rarest Hatch", value=f"{rarest['pet']}\n1 in {rarest['rarity']}", inline=False)
+        if serial:
+            embed.add_field(name="Lowest Serial", value=f"{serial['pet']}\n#{serial['serial']}", inline=False)
+        await interaction.response.send_message(embed=embed)
 
 
     @bot.tree.command(

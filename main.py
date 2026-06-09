@@ -1953,8 +1953,7 @@ def run_bot():
             color=0xFFD700
         )
 
-        embed.description = "
-".join(
+        embed.description = "\\n".join(
             r["title"]
             for r in rows
         )

@@ -4,6 +4,7 @@ import secrets
 import threading
 import logging
 import asyncio
+from datetime import datetime, timedelta
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -1188,6 +1189,215 @@ def run_bot():
         embed.add_field(
             name="Owner",
             value=row["roblox_username"],
+            inline=False
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
+
+    @bot.tree.command(
+        name="firsthatch",
+        description="View your first recorded hatch"
+    )
+    async def firsthatch(
+        interaction: discord.Interaction
+    ):
+
+        try:
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                ORDER BY hatched_at ASC
+                LIMIT 1
+                """,
+                (str(interaction.user.id),)
+            )
+
+            row = cur.fetchone()
+            conn.close()
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not row:
+            await interaction.response.send_message(
+                "No hatch history found.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="🥚 First Hatch",
+            color=0x57F287
+        )
+
+        embed.add_field(
+            name="Pet",
+            value=row["pet"],
+            inline=False
+        )
+
+        embed.add_field(
+            name="Rarity",
+            value=f"1 in {row['rarity']}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Type",
+            value=row["pet_rarity"],
+            inline=True
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+    @bot.tree.command(
+        name="whohatched",
+        description="Find who hatched a pet"
+    )
+    @app_commands.describe(
+        pet="Pet name"
+    )
+    async def whohatched(
+        interaction: discord.Interaction,
+        pet: str
+    ):
+
+        try:
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE LOWER(pet) = LOWER(%s)
+                ORDER BY hatched_at ASC
+                LIMIT 10
+                """,
+                (pet,)
+            )
+
+            rows = cur.fetchall()
+            conn.close()
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not rows:
+            await interaction.response.send_message(
+                "No hatches found.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title=f"🔎 {pet}",
+            color=0x5865F2
+        )
+
+        for row in rows[:10]:
+
+            embed.add_field(
+                name=row["roblox_username"],
+                value=f"1 in {row['rarity']}",
+                inline=False
+            )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+    @bot.tree.command(
+        name="streak",
+        description="View your hatch streak"
+    )
+    async def streak(
+        interaction: discord.Interaction
+    ):
+
+        try:
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT hatched_at
+                FROM hatch_history
+                WHERE discord_id = %s
+                ORDER BY hatched_at DESC
+                """,
+                (str(interaction.user.id),)
+            )
+
+            rows = cur.fetchall()
+            conn.close()
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not rows:
+            await interaction.response.send_message(
+                "No hatch history found.",
+                ephemeral=True
+            )
+            return
+
+        days = sorted(
+            {
+                r["hatched_at"].date()
+                for r in rows
+            },
+            reverse=True
+        )
+
+        streak_count = 0
+        current = days[0]
+
+        for day in days:
+
+            if day == current:
+                streak_count += 1
+                current -= timedelta(days=1)
+            else:
+                break
+
+        embed = discord.Embed(
+            title="🔥 Hatch Streak",
+            color=0xE67E22
+        )
+
+        embed.add_field(
+            name="Current Streak",
+            value=f"{streak_count} day(s)",
             inline=False
         )
 

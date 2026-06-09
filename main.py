@@ -231,6 +231,49 @@ def refresh_shop():
     conn.close()
 
 
+
+def handle_job_cooldown(discord_id, column, cooldown_seconds):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        f"SELECT {column} FROM player_jobs WHERE discord_id = %s",
+        (discord_id,)
+    )
+
+    row = cur.fetchone()
+
+    now = datetime.utcnow()
+
+    if row and row[column]:
+        elapsed = (now - row[column]).total_seconds()
+
+        if elapsed < cooldown_seconds:
+            conn.close()
+            return False, int((cooldown_seconds - elapsed) / 60)
+
+    cur.execute(
+        """
+        INSERT INTO player_jobs (discord_id)
+        VALUES (%s)
+        ON CONFLICT (discord_id)
+        DO NOTHING
+        """,
+        (discord_id,)
+    )
+
+    cur.execute(
+        f"UPDATE player_jobs SET {column} = NOW() WHERE discord_id = %s",
+        (discord_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return True, 0
+
+
 def load_data():
     try:
         if os.path.exists(DATA_FILE):
@@ -1668,6 +1711,59 @@ def run_bot():
         embed.add_field(name="Coins Earned", value=f"{reward:,}")
 
         await interaction.response.send_message(embed=embed)
+
+
+
+    @bot.tree.command(name="fish", description="Go fishing")
+    async def fish(interaction: discord.Interaction):
+        discord_id = str(interaction.user.id)
+        ok, wait = handle_job_cooldown(discord_id, "last_fish", 900)
+        if not ok:
+            await interaction.response.send_message(f"⏳ Come back in {wait}m", ephemeral=True)
+            return
+        reward = secrets.randbelow(101) + 50
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("UPDATE player_profiles SET coins = coins + %s WHERE discord_id = %s",(reward,discord_id))
+        conn.commit(); conn.close()
+        await interaction.response.send_message(f"🎣 You earned {reward:,} coins!")
+
+    @bot.tree.command(name="mine", description="Go mining")
+    async def mine(interaction: discord.Interaction):
+        discord_id = str(interaction.user.id)
+        ok, wait = handle_job_cooldown(discord_id, "last_mine", 1800)
+        if not ok:
+            await interaction.response.send_message(f"⏳ Come back in {wait}m", ephemeral=True)
+            return
+        reward = secrets.randbelow(201) + 100
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("UPDATE player_profiles SET coins = coins + %s WHERE discord_id = %s",(reward,discord_id))
+        conn.commit(); conn.close()
+        await interaction.response.send_message(f"⛏️ You earned {reward:,} coins!")
+
+    @bot.tree.command(name="delivery", description="Make a delivery")
+    async def delivery(interaction: discord.Interaction):
+        discord_id = str(interaction.user.id)
+        ok, wait = handle_job_cooldown(discord_id, "last_delivery", 3600)
+        if not ok:
+            await interaction.response.send_message(f"⏳ Come back in {wait}m", ephemeral=True)
+            return
+        reward = secrets.randbelow(501) + 250
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("UPDATE player_profiles SET coins = coins + %s WHERE discord_id = %s",(reward,discord_id))
+        conn.commit(); conn.close()
+        await interaction.response.send_message(f"📦 You earned {reward:,} coins!")
+
+    @bot.tree.command(name="givecoins", description="Give coins to a player")
+    @app_commands.describe(user="User", amount="Amount")
+    async def givecoins(interaction: discord.Interaction, user: discord.Member, amount: int):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator only.", ephemeral=True)
+            return
+        ensure_profile(str(user.id))
+        conn=get_db(); cur=conn.cursor()
+        cur.execute("UPDATE player_profiles SET coins = coins + %s WHERE discord_id = %s",(amount,str(user.id)))
+        conn.commit(); conn.close()
+        await interaction.response.send_message(f"✅ Gave {amount:,} coins to {user.mention}")
 
 
     @bot.tree.command(

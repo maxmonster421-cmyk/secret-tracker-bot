@@ -944,6 +944,258 @@ def run_bot():
 
 
 
+
+    @bot.tree.command(
+        name="profile",
+        description="View your Bubble Gum profile"
+    )
+    async def profile(
+        interaction: discord.Interaction
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        with data_lock:
+            linked = data["verified"].get(
+                discord_id,
+                []
+            )
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                """,
+                (discord_id,)
+            )
+
+            rows = cur.fetchall()
+
+            conn.close()
+
+        except Exception:
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        total = len(rows)
+
+        secrets = sum(
+            1 for r in rows
+            if r["pet_rarity"] == "Secret"
+        )
+
+        novas = sum(
+            1 for r in rows
+            if r["pet_rarity"] == "Nova"
+        )
+
+        rarest = None
+
+        if rows:
+            rarest = max(
+                rows,
+                key=lambda r: float(
+                    str(r["rarity"]).replace(",", "")
+                )
+            )
+
+        embed = discord.Embed(
+            title=f"👤 {interaction.user.display_name}",
+            color=0x5865F2
+        )
+
+        embed.add_field(
+            name="Linked Accounts",
+            value=str(len(linked)),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Rare Hatches",
+            value=f"{total:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Secrets",
+            value=f"{secrets:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Novas",
+            value=f"{novas:,}",
+            inline=True
+        )
+
+        if rarest:
+            embed.add_field(
+                name="Best Hatch",
+                value=rarest["pet"],
+                inline=False
+            )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+    @bot.tree.command(
+        name="leaderboard",
+        description="Top hatchers"
+    )
+    async def leaderboard(
+        interaction: discord.Interaction
+    ):
+
+        try:
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT
+                    discord_id,
+                    COUNT(*) AS total
+                FROM hatch_history
+                GROUP BY discord_id
+                ORDER BY total DESC
+                LIMIT 10
+                """
+            )
+
+            rows = cur.fetchall()
+
+            conn.close()
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+
+            return
+
+        embed = discord.Embed(
+            title="🏆 Hatch Leaderboard",
+            color=0xF1C40F
+        )
+
+        for i, row in enumerate(rows, start=1):
+
+            try:
+                user = await bot.fetch_user(
+                    int(row["discord_id"])
+                )
+
+                name = user.name
+
+            except Exception:
+                name = row["discord_id"]
+
+            embed.add_field(
+                name=f"#{i} {name}",
+                value=f"{row['total']:,} hatches",
+                inline=False
+            )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+    @bot.tree.command(
+        name="serial",
+        description="Search a serial number"
+    )
+    @app_commands.describe(
+        number="Serial number"
+    )
+    async def serial(
+        interaction: discord.Interaction,
+        number: int
+    ):
+
+        try:
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE serial = %s
+                LIMIT 1
+                """,
+                (number,)
+            )
+
+            row = cur.fetchone()
+
+            conn.close()
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+
+            return
+
+        if not row:
+
+            await interaction.response.send_message(
+                "Serial not found.",
+                ephemeral=True
+            )
+
+            return
+
+        embed = discord.Embed(
+            title=f"🔎 Serial #{number}",
+            color=0x5865F2
+        )
+
+        embed.add_field(
+            name="Pet",
+            value=row["pet"],
+            inline=True
+        )
+
+        embed.add_field(
+            name="Type",
+            value=row["pet_rarity"],
+            inline=True
+        )
+
+        embed.add_field(
+            name="Rarity",
+            value=f"1 in {row['rarity']}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Owner",
+            value=row["roblox_username"],
+            inline=False
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
     @bot.tree.command(
         name="unlink",
         description="Unlink a Roblox account"

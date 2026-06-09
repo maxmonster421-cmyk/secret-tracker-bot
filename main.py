@@ -131,6 +131,51 @@ def hatch():
     log.info(f"[LOOKUP] {username} -> {discord_id}")
 
     if discord_id:
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                INSERT INTO hatch_history
+                (
+                    discord_id,
+                    roblox_username,
+                    pet,
+                    rarity,
+                    pet_rarity,
+                    egg,
+                    world,
+                    serial,
+                    total_count
+                )
+                VALUES
+                (
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s
+                )
+                """,
+                (
+                    discord_id,
+                    username,
+                    pet,
+                    rarity,
+                    pet_rarity,
+                    egg,
+                    world,
+                    serial,
+                    total_count
+                )
+            )
+
+            conn.commit()
+            conn.close()
+
+        except Exception:
+            log.exception(
+                "Failed saving hatch history"
+            )
+
         with data_lock:
             data["hatch_queue"].append({
                 "discord_id": discord_id,
@@ -478,6 +523,155 @@ def run_bot():
             inline=False
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+    @bot.tree.command(
+        name="hatchstats",
+        description="View your hatch statistics"
+    )
+    async def hatchstats(
+        interaction: discord.Interaction
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                """,
+                (discord_id,)
+            )
+
+            rows = cur.fetchall()
+            conn.close()
+
+        except Exception:
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not rows:
+            await interaction.response.send_message(
+                "No hatch history found.",
+                ephemeral=True
+            )
+            return
+
+        total = len(rows)
+
+        secrets = sum(
+            1 for r in rows
+            if r["pet_rarity"] == "Secret"
+        )
+
+        novas = sum(
+            1 for r in rows
+            if r["pet_rarity"] == "Nova"
+        )
+
+        rarest = max(
+            rows,
+            key=lambda r: float(r["rarity"])
+        )
+
+        embed = discord.Embed(
+            title="📊 Hatch Statistics",
+            color=0x5865F2
+        )
+
+        embed.add_field(
+            name="Total Rare Hatches",
+            value=f"{total:,}"
+        )
+
+        embed.add_field(
+            name="Secrets",
+            value=f"{secrets:,}"
+        )
+
+        embed.add_field(
+            name="Novas",
+            value=f"{novas:,}"
+        )
+
+        embed.add_field(
+            name="Rarest Hatch",
+            value=rarest["pet"],
+            inline=False
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+    @bot.tree.command(
+        name="rarest",
+        description="View your rarest hatches"
+    )
+    async def rarest(
+        interaction: discord.Interaction
+    ):
+
+        discord_id = str(interaction.user.id)
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM hatch_history
+                WHERE discord_id = %s
+                ORDER BY CAST(rarity AS DOUBLE PRECISION) DESC
+                LIMIT 10
+                """,
+                (discord_id,)
+            )
+
+            rows = cur.fetchall()
+            conn.close()
+
+        except Exception:
+            await interaction.response.send_message(
+                "Database error.",
+                ephemeral=True
+            )
+            return
+
+        if not rows:
+            await interaction.response.send_message(
+                "No hatch history found.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="🏆 Rarest Hatches",
+            color=0xF1C40F
+        )
+
+        for i, row in enumerate(rows, start=1):
+            embed.add_field(
+                name=f"#{i} {row['pet']}",
+                value=f"1 in {row['rarity']}",
+                inline=False
+            )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
 
     @bot.tree.command(
         name="unlink",

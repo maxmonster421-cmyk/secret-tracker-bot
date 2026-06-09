@@ -1918,17 +1918,51 @@ def run_bot():
         )
 
 
-@bot.tree.command(name="titles", description="View unlocked titles")
-    async def titles(interaction: discord.Interaction):
-        conn=get_db(); cur=conn.cursor()
-        cur.execute("SELECT title FROM player_titles WHERE discord_id = %s",(str(interaction.user.id),))
-        rows=cur.fetchall(); conn.close()
+    @bot.tree.command(
+        name="titles",
+        description="View unlocked titles"
+    )
+    async def titles(
+        interaction: discord.Interaction
+    ):
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT title
+            FROM player_titles
+            WHERE discord_id = %s
+            """,
+            (str(interaction.user.id),)
+        )
+
+        rows = cur.fetchall()
+
+        conn.close()
+
         if not rows:
-            await interaction.response.send_message("No titles unlocked.")
+            await interaction.response.send_message(
+                "No titles unlocked."
+            )
             return
-        embed=discord.Embed(title="👑 Titles", color=0xFFD700)
-        embed.description="\n".join(r["title"] for r in rows)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        embed = discord.Embed(
+            title="👑 Titles",
+            color=0xFFD700
+        )
+
+        embed.description = "
+".join(
+            r["title"]
+            for r in rows
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
 
     
     @bot.tree.command(

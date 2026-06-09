@@ -728,11 +728,16 @@ def run_bot():
 
         for row in rows:
 
+            unix_time = int(
+                row["hatched_at"].timestamp()
+            )
+
             embed.add_field(
                 name=row["pet"],
                 value=(
                     f"{row['pet_rarity']} • "
-                    f"1 in {row['rarity']}"
+                    f"1 in {row['rarity']}\n"
+                    f"<t:{unix_time}:R>"
                 ),
                 inline=False
             )

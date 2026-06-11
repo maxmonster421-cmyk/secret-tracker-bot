@@ -1270,8 +1270,19 @@ def run_bot():
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-    bot.run(BOT_TOKEN)
+    bot.run(
+        BOT_TOKEN,
+        reconnect=True
+    )
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot, daemon=True).start()
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+    threading.Thread(
+        target=lambda: app.run(
+            host="0.0.0.0",
+            port=PORT,
+            threaded=True,
+            use_reloader=False
+        )
+    ).start()
+
+    run_bot()

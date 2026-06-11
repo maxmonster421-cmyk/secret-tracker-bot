@@ -8,6 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from flask import Flask, request, jsonify
+from waitress import serve
 
 API_SECRET = os.environ.get("API_SECRET", "CHANGE_ME")
 BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -444,6 +445,10 @@ def run_bot():
     @bot.event
     async def on_resumed():
         log.info("[BOT] RESUMED")
+
+    @bot.event
+    async def on_error(event, *args, **kwargs):
+        log.exception(f"Error in {event}")
 
     @bot.event
     async def on_ready():
@@ -1277,11 +1282,10 @@ def run_bot():
 
 if __name__ == "__main__":
     threading.Thread(
-        target=lambda: app.run(
+        target=lambda: serve(
+            app,
             host="0.0.0.0",
-            port=PORT,
-            threaded=True,
-            use_reloader=False
+            port=PORT
         )
     ).start()
 
